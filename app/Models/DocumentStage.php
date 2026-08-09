@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class DocumentStage extends Model
 {
-    protected $fillable = ['document_id', 'stage_number', 'stage_name', 'status', 'notes', 'handled_by', 'completed_at'];
+    protected $fillable = ['document_id', 'stage_number', 'stage_name', 'status', 'notes', 'handled_by', 'completed_at', 'sla_days'];
 
     protected $casts = ['completed_at' => 'datetime'];
 

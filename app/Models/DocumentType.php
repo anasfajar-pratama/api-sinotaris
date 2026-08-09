@@ -14,4 +14,24 @@ class DocumentType extends Model
     {
         return $this->hasMany(Document::class, 'type_id');
     }
+
+    public function actorDefinitions()
+    {
+        return $this->hasMany(DocumentTypeActor::class)->orderBy('sort_order');
+    }
+
+    public function assetDefinitions()
+    {
+        return $this->hasMany(DocumentTypeAsset::class)->orderBy('sort_order');
+    }
+
+    public function stages()
+    {
+        return $this->hasMany(DocumentTypeStage::class)->orderBy('stage_number');
+    }
+
+    public function requiredDocuments()
+    {
+        return $this->hasMany(DocumentTypeDocument::class)->orderBy('sort_order');
+    }
 }

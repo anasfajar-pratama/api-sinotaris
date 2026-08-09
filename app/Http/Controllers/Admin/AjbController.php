@@ -5,9 +5,10 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\AjbCase;
 use App\Models\AjbStep;
-use App\Models\AjbSeller;
-use App\Models\AjbBuyer;
-use App\Models\AjbCertificate;
+use App\Models\ActorType;
+use App\Models\AssetType;
+use App\Models\OrderActor;
+use App\Models\OrderAsset;
 use App\Models\AjbTaxPayment;
 use App\Models\AjbDocument;
 use App\Models\AjbBpnSubmission;
@@ -22,13 +23,29 @@ class AjbController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = AjbCase::with(['document.client', 'sellers', 'buyers'])
+        $query = AjbCase::with(['document.client', 'document.actors.actorType', 'document.assets.assetType'])
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->when($request->search, fn ($q) => $q->where('case_number', 'like', "%{$request->search}%"))
             ->when($request->source_type, fn ($q) => $q->where('source_type', $request->source_type))
             ->latest();
 
-        return response()->json($query->paginate($request->per_page ?? 15));
+        $cases = $query->paginate($request->per_page ?? 15);
+        $cases->getCollection()->transform(fn ($case) => $this->withParties($case));
+
+        return response()->json($cases);
+    }
+
+    private function withParties(AjbCase $case): AjbCase
+    {
+        $flatActor = fn ($actor) => array_merge(['id' => $actor->id, 'actor_type' => $actor->actorType], is_array($actor->data) ? $actor->data : []);
+        $flatAsset = fn ($asset) => array_merge(['id' => $asset->id, 'asset_type' => $asset->assetType], is_array($asset->data) ? $asset->data : []);
+
+        $case->sellers = $case->document?->actors
+            ->where('actorType.key', 'penjual')->values()->map($flatActor);
+        $case->buyers = $case->document?->actors
+            ->where('actorType.key', 'pembeli')->values()->map($flatActor);
+        $case->certificates = $case->document?->assets->values()->map($flatAsset);
+        return $case;
     }
 
     public function store(Request $request): JsonResponse
@@ -103,16 +120,16 @@ class AjbController extends Controller
     {
         $ajbCase = AjbCase::with([
             'document.client',
-            'sellers',
-            'buyers',
-            'certificates',
+            'document.actors.actorType',
+            'document.assets.assetType',
+            'document.stages',
             'taxPayments',
             'documents',
             'steps.completedBy',
             'bpnSubmission',
         ])->findOrFail($id);
 
-        return response()->json(['ajb_case' => $ajbCase]);
+        return response()->json(['ajb_case' => $this->withParties($ajbCase)]);
     }
 
     public function update(Request $request, int $id): JsonResponse
@@ -163,57 +180,76 @@ class AjbController extends Controller
 
     public function addSeller(Request $request, int $id): JsonResponse
     {
-        $ajbCase = AjbCase::findOrFail($id);
-        $validator = Validator::make($request->all(), [
-            'name'           => 'required|string|max:255',
-            'nik'            => 'required|string|max:20',
-            'npwp'           => 'nullable|string|max:30',
-            'address'        => 'required|string',
-            'marital_status' => 'required|in:single,married,widowed',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
-        }
-
-        $seller = AjbSeller::create(['ajb_case_id' => $id, ...$request->all()]);
-        return response()->json(['message' => 'Data penjual berhasil ditambahkan', 'seller' => $seller], 201);
+        return $this->addActor($request, $id, 'penjual', 'Data penjual berhasil ditambahkan');
     }
 
-    public function updateSeller(Request $request, int $id, int $sellerId): JsonResponse
+    public function updateSeller(Request $request, int $id, int $actorId): JsonResponse
     {
-        $seller = AjbSeller::where('ajb_case_id', $id)->findOrFail($sellerId);
-        $seller->update($request->all());
-        return response()->json(['message' => 'Data penjual berhasil diperbarui', 'seller' => $seller->fresh()]);
+        return $this->updateActor($request, $id, $actorId, 'Data penjual berhasil diperbarui');
     }
 
     public function addBuyer(Request $request, int $id): JsonResponse
     {
+        return $this->addActor($request, $id, 'pembeli', 'Data pembeli berhasil ditambahkan');
+    }
+
+    public function updateBuyer(Request $request, int $id, int $actorId): JsonResponse
+    {
+        return $this->updateActor($request, $id, $actorId, 'Data pembeli berhasil diperbarui');
+    }
+
+    private function addActor(Request $request, int $id, string $actorKey, string $message): JsonResponse
+    {
         $ajbCase = AjbCase::findOrFail($id);
+        $actorType = ActorType::where('key', $actorKey)->firstOrFail();
+
         $validator = Validator::make($request->all(), [
-            'name'    => 'required|string|max:255',
-            'nik'     => 'required|string|max:20',
-            'npwp'    => 'nullable|string|max:30',
-            'address' => 'required|string',
+            'name'           => 'required|string|max:255',
+            'nik'            => 'nullable|string|max:20',
+            'npwp'           => 'nullable|string|max:30',
+            'address'        => 'nullable|string',
+            'phone'          => 'nullable|string|max:20',
+            'marital_status' => 'nullable|in:single,married,widowed',
+            'spouse_name'    => 'nullable|string|max:255',
+            'spouse_nik'     => 'nullable|string|max:20',
+            'data'           => 'nullable|array',
         ]);
 
         if ($validator->fails()) {
             return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
         }
 
-        $buyer = AjbBuyer::create(['ajb_case_id' => $id, ...$request->all()]);
-        return response()->json(['message' => 'Data pembeli berhasil ditambahkan', 'buyer' => $buyer], 201);
+        $data = array_merge($request->except(['data']), $request->input('data', []));
+        $count = OrderActor::where('document_id', $ajbCase->document_id)->count();
+
+        $actor = OrderActor::create([
+            'document_id'   => $ajbCase->document_id,
+            'actor_type_id' => $actorType->id,
+            'data'          => $data,
+            'sort_order'    => $count + 1,
+        ]);
+
+        return response()->json(['message' => $message, 'actor' => $actor->load('actorType')], 201);
     }
 
-    public function updateBuyer(Request $request, int $id, int $buyerId): JsonResponse
+    private function updateActor(Request $request, int $id, int $actorId, string $message): JsonResponse
     {
-        $buyer = AjbBuyer::where('ajb_case_id', $id)->findOrFail($buyerId);
-        $buyer->update($request->all());
-        return response()->json(['message' => 'Data pembeli berhasil diperbarui', 'buyer' => $buyer->fresh()]);
+        $ajbCase = AjbCase::findOrFail($id);
+        $actor = OrderActor::where('document_id', $ajbCase->document_id)->findOrFail($actorId);
+
+        $data = $request->has('data')
+            ? array_merge(is_array($actor->data) ? $actor->data : [], $request->input('data'))
+            : array_merge(is_array($actor->data) ? $actor->data : [], $request->except(['data']));
+
+        $actor->update(['data' => $data]);
+        return response()->json(['message' => $message, 'actor' => $actor->fresh()->load('actorType')]);
     }
 
     public function addCertificate(Request $request, int $id): JsonResponse
     {
+        $ajbCase = AjbCase::findOrFail($id);
+        $assetType = AssetType::where('key', 'sertifikat-tanah')->firstOrFail();
+
         $validator = Validator::make($request->all(), [
             'cert_number' => 'required|string',
             'cert_type'   => 'required|in:SHM,SHGB,SHSRS,girik,other',
@@ -225,21 +261,31 @@ class AjbController extends Controller
             return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
         }
 
-        $cert = AjbCertificate::create(['ajb_case_id' => $id, ...$request->all()]);
-        return response()->json(['message' => 'Data sertifikat berhasil ditambahkan', 'certificate' => $cert], 201);
+        $count = OrderAsset::where('document_id', $ajbCase->document_id)->count();
+        $asset = OrderAsset::create([
+            'document_id'   => $ajbCase->document_id,
+            'asset_type_id' => $assetType->id,
+            'data'          => $request->only(['cert_number', 'cert_type', 'land_area', 'address', 'notes']),
+            'sort_order'    => $count + 1,
+        ]);
+
+        return response()->json(['message' => 'Data sertifikat berhasil ditambahkan', 'certificate' => $asset->load('assetType')], 201);
     }
 
-    public function updateCertificate(Request $request, int $id, int $certId): JsonResponse
+    public function updateCertificate(Request $request, int $id, int $assetId): JsonResponse
     {
-        $cert = AjbCertificate::where('ajb_case_id', $id)->findOrFail($certId);
-        $cert->update($request->all());
+        $ajbCase = AjbCase::findOrFail($id);
+        $asset = OrderAsset::where('document_id', $ajbCase->document_id)->findOrFail($assetId);
 
-        // Auto-advance to step 2 if verified
+        $data = array_merge(is_array($asset->data) ? $asset->data : [], $request->only([
+            'cert_number', 'cert_type', 'land_area', 'address', 'notes', 'verified_at',
+        ]));
         if ($request->has('verified_at') && $request->verified_at) {
-            $cert->update(['verified_by' => $request->user()->id]);
+            $data['verified_by'] = $request->user()->id;
         }
+        $asset->update(['data' => $data]);
 
-        return response()->json(['message' => 'Data sertifikat berhasil diperbarui', 'certificate' => $cert->fresh()]);
+        return response()->json(['message' => 'Data sertifikat berhasil diperbarui', 'certificate' => $asset->fresh()->load('assetType')]);
     }
 
     public function addTaxPayment(Request $request, int $id): JsonResponse

@@ -87,6 +87,21 @@ class Document extends Model
         return $this->hasOne(AjbCase::class);
     }
 
+    public function actors()
+    {
+        return $this->hasMany(OrderActor::class)->orderBy('sort_order');
+    }
+
+    public function assets()
+    {
+        return $this->hasMany(OrderAsset::class)->orderBy('sort_order');
+    }
+
+    public function orderDocuments()
+    {
+        return $this->hasMany(OrderDocument::class)->orderBy('id');
+    }
+
     public function getStatusBadgeAttribute(): string
     {
         return match ($this->status) {

@@ -116,6 +116,7 @@ class AuthController extends Controller
             'last_login' => $user->last_login,
             'role'       => $user->getRoleNames()->first(),
             'roles'      => $user->getRoleNames(),
+            'permissions'=> $user->getAllPermissions()->pluck('name')->sort()->values(),
             'created_at' => $user->created_at,
         ];
     }

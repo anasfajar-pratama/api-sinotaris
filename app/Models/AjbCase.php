@@ -49,21 +49,6 @@ class AjbCase extends Model
         return $this->belongsTo(Document::class);
     }
 
-    public function sellers()
-    {
-        return $this->hasMany(AjbSeller::class);
-    }
-
-    public function buyers()
-    {
-        return $this->hasMany(AjbBuyer::class);
-    }
-
-    public function certificates()
-    {
-        return $this->hasMany(AjbCertificate::class);
-    }
-
     public function taxPayments()
     {
         return $this->hasMany(AjbTaxPayment::class);

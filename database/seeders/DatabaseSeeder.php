@@ -13,6 +13,8 @@ class DatabaseSeeder extends Seeder
             RolesAndPermissionsSeeder::class,
             UserSeeder::class,
             DocumentTypeSeeder::class,
+            OrderTemplateSeeder::class,
+            SlaDocumentSeeder::class,
             ClientSeeder::class,
             DocumentSeeder::class,
             SystemSettingSeeder::class,

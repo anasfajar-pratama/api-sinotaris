@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\Document;
 use App\Models\DocumentFile;
 use App\Models\DocumentStage;
+use App\Models\DocumentType;
+use App\Models\DocumentTypeActorDocument;
 use App\Models\ActivityLog;
 use App\Notifications\DocumentStatusUpdated;
 use Illuminate\Http\Request;
@@ -58,16 +60,26 @@ class DocumentController extends Controller
             'current_stage' => 1,
         ]);
 
-        // Create default stages
-        $stages = [
-            ['stage_number' => 1, 'stage_name' => 'Pembuatan Dokumen', 'status' => 'in_progress'],
-            ['stage_number' => 2, 'stage_name' => 'Verifikasi', 'status' => 'pending'],
-            ['stage_number' => 3, 'stage_name' => 'Proses', 'status' => 'pending'],
-            ['stage_number' => 4, 'stage_name' => 'Review / Pemeriksaan', 'status' => 'pending'],
-            ['stage_number' => 5, 'stage_name' => 'Selesai', 'status' => 'pending'],
+        // Create stages from document type template (fallback: default 5)
+        $defaultStages = [
+            'Pembuatan Dokumen',
+            'Verifikasi',
+            'Proses',
+            'Review / Pemeriksaan',
+            'Selesai',
         ];
-        foreach ($stages as $stage) {
-            DocumentStage::create(['document_id' => $document->id, ...$stage]);
+        $type = DocumentType::find($document->type_id);
+        $stageNames = $type?->stages?->pluck('stage_name')->all() ?: $defaultStages;
+        $stageSla = $type?->stages?->pluck('sla_days')->all() ?? [];
+
+        foreach ($stageNames as $i => $stageName) {
+            DocumentStage::create([
+                'document_id'   => $document->id,
+                'stage_number'  => $i + 1,
+                'stage_name'    => $stageName,
+                'sla_days'      => $stageSla[$i] ?? null,
+                'status'        => $i === 0 ? 'in_progress' : 'pending',
+            ]);
         }
 
         ActivityLog::create([
@@ -87,10 +99,72 @@ class DocumentController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $document = Document::with(['documentType', 'client', 'creator', 'files', 'stages.handler', 'ajbCase'])
-            ->findOrFail($id);
+        $document = Document::with([
+            'documentType.requiredDocuments.documentCatalog',
+            'documentType.stages',
+            'client',
+            'creator',
+            'files',
+            'stages.handler',
+            'ajbCase',
+            'actors.actorType',
+            'actors.documents.documentCatalog',
+            'assets.assetType',
+            'assets.documents.documentCatalog',
+            'orderDocuments.documentCatalog',
+        ])->findOrFail($id);
 
-        return response()->json(['document' => $document]);
+        $completeness = $this->completeness($document);
+
+        return response()->json(['document' => $document, 'completeness' => $completeness]);
+    }
+
+    private function completeness(Document $document): array
+    {
+        $items = [];
+
+        // Dokumen wajib level order
+        $document->documentType?->requiredDocuments->each(function ($req) use (&$items, $document) {
+            $catalog = $req->documentCatalog;
+            $items[] = [
+                'group'     => 'Order',
+                'key'       => $catalog?->key,
+                'label'     => $catalog?->label ?? 'Dokumen',
+                'required'  => true,
+                'uploaded'  => $document->orderDocuments->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id),
+            ];
+        });
+
+        // Dokumen wajib per pihak (query langsung agar tidak silang antar aktor)
+        $requiredDocs = DocumentTypeActorDocument::with('documentCatalog')
+            ->where('document_type_id', $document->type_id)
+            ->where('is_required', true)
+            ->orderBy('sort_order')
+            ->get();
+
+        foreach ($document->actors as $actor) {
+            $label = $actor->actorType?->label ?? 'Pihak';
+            foreach ($requiredDocs->where('actor_type_id', $actor->actor_type_id) as $req) {
+                $catalog = $req->documentCatalog;
+                $items[] = [
+                    'group'     => $label,
+                    'key'       => $catalog?->key,
+                    'label'     => $catalog?->label ?? 'Dokumen',
+                    'required'  => true,
+                    'uploaded'  => $actor->documents->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id),
+                ];
+            }
+        }
+
+        $requiredCount = count($items);
+        $uploadedCount = collect($items)->where('uploaded', true)->count();
+
+        return [
+            'items'          => $items,
+            'total_required' => $requiredCount,
+            'total_uploaded' => $uploadedCount,
+            'percentage'     => $requiredCount ? (int) round($uploadedCount / $requiredCount * 100) : 100,
+        ];
     }
 
     public function update(Request $request, int $id): JsonResponse
@@ -155,8 +229,9 @@ class DocumentController extends Controller
     {
         $document = Document::findOrFail($id);
 
+        $lastStage = $document->stages()->max('stage_number') ?? 5;
         $validator = Validator::make($request->all(), [
-            'stage_number' => 'required|integer|min:1|max:5',
+            'stage_number' => "required|integer|min:1|max:{$lastStage}",
             'status'       => 'required|in:pending,in_progress,completed',
             'notes'        => 'nullable|string',
         ]);
@@ -176,15 +251,13 @@ class DocumentController extends Controller
             'completed_at' => $request->status === 'completed' ? now() : null,
         ]);
 
-        // Update document status
-        if ($request->stage_number == 5 && $request->status === 'completed') {
-            $document->update(['status' => 'completed', 'current_stage' => 5]);
+        // Update document status (dynamic based on stage template)
+        if ($request->stage_number == $lastStage && $request->status === 'completed') {
+            $document->update(['status' => 'completed', 'current_stage' => $lastStage]);
         } elseif ($request->status === 'in_progress') {
             $docStatus = match ($request->stage_number) {
                 1 => 'draft',
-                2, 3 => 'in_progress',
-                4 => 'review',
-                5 => 'completed',
+                $lastStage => 'review',
                 default => 'in_progress',
             };
             $document->update(['status' => $docStatus, 'current_stage' => $request->stage_number]);
