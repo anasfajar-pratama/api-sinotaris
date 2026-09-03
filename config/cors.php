@@ -14,6 +14,7 @@ return [
 
     'allowed_origins' => [
         'https://sinotaris.kebunkode.com',
+        'https://dev-sinotaris.kebunkode.com',
         'https://api-sinotaris.kebunkode.com',
         'http://localhost:3000',
         'http://localhost:5173',
