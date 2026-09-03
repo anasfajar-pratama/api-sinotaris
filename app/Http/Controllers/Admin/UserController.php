@@ -33,6 +33,24 @@ class UserController extends Controller
         return response()->json($users);
     }
 
+    public function employees(Request $request): JsonResponse
+    {
+        $users = User::with('roles')
+            ->where('is_active', true)
+            ->get()
+            ->filter(fn ($user) => $user->getRoleNames()->first() !== 'klien')
+            ->map(fn ($user) => [
+                'id'        => $user->id,
+                'name'      => $user->name,
+                'role'      => $user->getRoleNames()->first(),
+                'is_active' => (bool) $user->is_active,
+            ])
+            ->sortBy('name')
+            ->values();
+
+        return response()->json(['data' => $users]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [

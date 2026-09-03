@@ -38,7 +38,16 @@ class ClientDocumentController extends Controller
             return response()->json(['message' => 'Klien tidak ditemukan'], 404);
         }
 
-        $document = Document::with(['documentType', 'stages', 'files'])
+        $document = Document::with([
+            'documentType',
+            'stages',
+            'files',
+            'orderDocuments.documentCatalog',
+            'actors.actorType',
+            'actors.documents.documentCatalog',
+            'assets.assetType',
+            'assets.documents.documentCatalog',
+        ])
             ->where('client_id', $client->id)
             ->findOrFail($id);
 

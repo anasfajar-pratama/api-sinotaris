@@ -47,6 +47,7 @@ class OrderTemplateSeeder extends Seeder
         }
 
         // ---- Master data: profile fields ----
+        // Entry ke-4 bersifat opsional = options untuk data_type 'select'.
         $fields = [
             ['name', 'Nama Lengkap', 'text'],
             ['nik', 'NIK', 'text'],
@@ -56,7 +57,11 @@ class OrderTemplateSeeder extends Seeder
             ['address', 'Alamat', 'textarea'],
             ['phone', 'Telepon', 'text'],
             ['email', 'Email', 'text'],
-            ['marital_status', 'Status Perkawinan', 'select'],
+            ['marital_status', 'Status Perkawinan', 'select', [
+                ['value' => 'single',  'label' => 'Lajang'],
+                ['value' => 'married',  'label' => 'Menikah'],
+                ['value' => 'widowed',  'label' => 'Cerai'],
+            ]],
             ['spouse_name', 'Nama Pasangan', 'text'],
             ['spouse_nik', 'NIK Pasangan', 'text'],
             ['citizenship', 'Kewarganegaraan', 'text'],
@@ -66,8 +71,13 @@ class OrderTemplateSeeder extends Seeder
             ['company_id', 'Nomor Induk Berusaha', 'text'],
         ];
         $fieldMap = [];
-        foreach ($fields as [$key, $label, $type]) {
-            $pf = ProfileField::firstOrCreate(['key' => $key], ['label' => $label, 'data_type' => $type, 'is_active' => true]);
+        foreach ($fields as $field) {
+            [$key, $label, $type] = $field;
+            $options = $field[3] ?? null;
+            $pf = ProfileField::updateOrCreate(
+                ['key' => $key],
+                ['label' => $label, 'data_type' => $type, 'options' => $options, 'is_active' => true]
+            );
             $fieldMap[$key] = $pf->id;
         }
 
@@ -75,6 +85,8 @@ class OrderTemplateSeeder extends Seeder
         $docs = [
             ['ktp', 'KTP', 'identity'],
             ['npwp', 'NPWP', 'identity'],
+            ['ktp_pasangan', 'KTP Pasangan', 'identity'],
+            ['npwp_pasangan', 'NPWP Pasangan', 'identity'],
             ['kk', 'Kartu Keluarga', 'identity'],
             ['marriage-certificate', 'Buku Nikah', 'legal'],
             ['akta-cerai', 'Akta Cerai / Putusan', 'legal'],

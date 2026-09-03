@@ -45,15 +45,22 @@ class Document extends Model
         $prefix = 'DOC';
         $year = now()->year;
         $month = str_pad(now()->month, 2, '0', STR_PAD_LEFT);
-        $count = self::whereYear('created_at', $year)->count() + 1;
-        return "{$prefix}/{$year}/{$month}/" . str_pad($count, 4, '0', STR_PAD_LEFT);
+        $count = self::withTrashed()->whereYear('created_at', $year)->whereMonth('created_at', now()->month)->count() + 1;
+
+        do {
+            $docNumber = "{$prefix}/{$year}/{$month}/" . str_pad($count, 4, '0', STR_PAD_LEFT);
+            $exists = self::withTrashed()->where('doc_number', $docNumber)->exists();
+            if ($exists) $count++;
+        } while ($exists);
+
+        return $docNumber;
     }
 
     public static function generateTrackingCode(): string
     {
         do {
             $code = strtoupper(substr(md5(uniqid()), 0, 10));
-        } while (self::where('tracking_code', $code)->exists());
+        } while (self::withTrashed()->where('tracking_code', $code)->exists());
         return $code;
     }
 

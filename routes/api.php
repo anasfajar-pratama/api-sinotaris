@@ -62,6 +62,8 @@ Route::prefix('v1')->group(function () {
                 Route::post('/{id}/notes', [DocumentController::class, 'addNote'])->middleware('permission:documents.edit');
                 Route::post('/{id}/files', [DocumentController::class, 'uploadFile'])->middleware('permission:documents.edit');
                 Route::delete('/{id}/files/{fileId}', [DocumentController::class, 'deleteFile'])->middleware('permission:documents.edit');
+                Route::post('/{id}/stages/{stageId}/documents', [DocumentController::class, 'uploadStageDocument'])->middleware('permission:documents.edit');
+                Route::delete('/{id}/stages/{stageId}/documents/{fileId}', [DocumentController::class, 'deleteStageDocument'])->middleware('permission:documents.edit');
             });
 
             // AJB Cases
@@ -110,6 +112,9 @@ Route::prefix('v1')->group(function () {
                 Route::get('templates', [NotificationController::class, 'templates'])->middleware('permission:notifications.manage');
                 Route::put('templates/{id}', [NotificationController::class, 'updateTemplate'])->middleware('permission:notifications.manage');
             });
+
+            // Employees (master pegawai utk pemilihan PIC di dokumen)
+            Route::get('employees', [UserController::class, 'employees'])->middleware('permission:documents.view');
 
             // Users (Notaris & Super Admin)
             Route::middleware('role:super-admin|notaris')->prefix('users')->group(function () {

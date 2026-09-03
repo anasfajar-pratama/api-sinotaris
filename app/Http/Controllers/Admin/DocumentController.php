@@ -4,11 +4,15 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Document;
+use App\Models\DocumentCatalog;
 use App\Models\DocumentFile;
 use App\Models\DocumentStage;
+use App\Models\DocumentStagePic;
+use App\Models\StageDocument;
 use App\Models\DocumentType;
 use App\Models\DocumentTypeActorDocument;
 use App\Models\ActivityLog;
+use App\Support\FileConverter;
 use App\Notifications\DocumentStatusUpdated;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
@@ -79,6 +83,7 @@ class DocumentController extends Controller
                 'stage_name'    => $stageName,
                 'sla_days'      => $stageSla[$i] ?? null,
                 'status'        => $i === 0 ? 'in_progress' : 'pending',
+                'started_at'    => $i === 0 ? now() : null,
             ]);
         }
 
@@ -106,6 +111,9 @@ class DocumentController extends Controller
             'creator',
             'files',
             'stages.handler',
+            'stages.pic',
+            'stages.documents',
+            'stages.picHistory',
             'ajbCase',
             'actors.actorType',
             'actors.documents.documentCatalog',
@@ -123,7 +131,7 @@ class DocumentController extends Controller
     {
         $items = [];
 
-        // Dokumen wajib level order
+        // Dokumen wajib level order (wajib)
         $document->documentType?->requiredDocuments->each(function ($req) use (&$items, $document) {
             $catalog = $req->documentCatalog;
             $items[] = [
@@ -135,15 +143,18 @@ class DocumentController extends Controller
             ];
         });
 
-        // Dokumen wajib per pihak (query langsung agar tidak silang antar aktor)
+        // Dokumen wajib per pihak (tampil sesuai aktor)
         $requiredDocs = DocumentTypeActorDocument::with('documentCatalog')
             ->where('document_type_id', $document->type_id)
             ->where('is_required', true)
             ->orderBy('sort_order')
             ->get();
 
+        $spouseCatalogs = DocumentCatalog::whereIn('key', ['ktp_pasangan', 'npwp_pasangan'])->get()->keyBy('key');
+
         foreach ($document->actors as $actor) {
             $label = $actor->actorType?->label ?? 'Pihak';
+
             foreach ($requiredDocs->where('actor_type_id', $actor->actor_type_id) as $req) {
                 $catalog = $req->documentCatalog;
                 $items[] = [
@@ -154,10 +165,25 @@ class DocumentController extends Controller
                     'uploaded'  => $actor->documents->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id),
                 ];
             }
+
+            // Dokumen pasangan (opsional) hanya jika status perkawinan = married
+            if (($actor->data['marital_status'] ?? null) === 'married') {
+                foreach (['ktp_pasangan' => 'KTP Pasangan', 'npwp_pasangan' => 'NPWP Pasangan'] as $key => $spLabel) {
+                    $catalog = $spouseCatalogs->get($key);
+                    $items[] = [
+                        'group'     => $label,
+                        'key'       => $key,
+                        'label'     => $spLabel,
+                        'required'  => false,
+                        'uploaded'  => $actor->documents->contains(fn ($d) => $d->document_catalog_id === $catalog?->id),
+                    ];
+                }
+            }
         }
 
-        $requiredCount = count($items);
-        $uploadedCount = collect($items)->where('uploaded', true)->count();
+        $requiredItems = collect($items)->where('required', true);
+        $requiredCount = $requiredItems->count();
+        $uploadedCount = $requiredItems->where('uploaded', true)->count();
 
         return [
             'items'          => $items,
@@ -217,7 +243,7 @@ class DocumentController extends Controller
 
     public function timeline(Request $request, int $id): JsonResponse
     {
-        $stages = DocumentStage::with('handler')
+        $stages = DocumentStage::with(['handler', 'pic', 'documents', 'picHistory'])
             ->where('document_id', $id)
             ->orderBy('stage_number')
             ->get();
@@ -234,6 +260,7 @@ class DocumentController extends Controller
             'stage_number' => "required|integer|min:1|max:{$lastStage}",
             'status'       => 'required|in:pending,in_progress,completed',
             'notes'        => 'nullable|string',
+            'pic_id'       => 'nullable|exists:users,id',
         ]);
 
         if ($validator->fails()) {
@@ -244,12 +271,45 @@ class DocumentController extends Controller
             ->where('stage_number', $request->stage_number)
             ->firstOrFail();
 
-        $stage->update([
-            'status'       => $request->status,
-            'notes'        => $request->notes,
-            'handled_by'   => $request->user()->id,
-            'completed_at' => $request->status === 'completed' ? now() : null,
-        ]);
+        if ($stage->status === 'completed' && $request->has('pic_id') && $request->pic_id != $stage->pic_id) {
+            return response()->json(['message' => 'PIC tahapan tidak dapat diubah setelah tahap selesai'], 422);
+        }
+
+        $oldPicId = $stage->pic_id;
+
+        $updates = [
+            'status'     => $request->status,
+            'notes'      => $request->notes,
+            'handled_by' => $request->user()->id,
+        ];
+
+        if ($request->has('pic_id')) {
+            $updates['pic_id'] = $request->pic_id;
+        }
+
+        if ($request->status === 'in_progress' && $stage->status !== 'in_progress') {
+            $updates['started_at'] = now();
+        }
+
+        if ($request->status === 'completed' && $stage->status !== 'completed') {
+            $updates['completed_at'] = now();
+        } elseif ($request->status !== 'completed') {
+            $updates['completed_at'] = null;
+        }
+
+        $stage->update($updates);
+
+        // Catat riwayat PIC (pindah tugas / penugasan) bila pic_id berubah.
+        if ($request->has('pic_id') && $request->pic_id != $oldPicId) {
+            DocumentStagePic::create([
+                'stage_id'    => $stage->id,
+                'user_id'     => $request->pic_id,
+                'assigned_by' => $request->user()->id,
+                'action'      => $oldPicId === null ? 'assigned' : 'transferred',
+                'note'        => $request->notes,
+                'assigned_at' => now(),
+            ]);
+        }
 
         // Update document status (dynamic based on stage template)
         if ($request->stage_number == $lastStage && $request->status === 'completed') {
@@ -292,7 +352,7 @@ class DocumentController extends Controller
 
         $document = Document::findOrFail($id);
         $file     = $request->file('file');
-        $path     = $file->store("documents/{$id}", 'public');
+        $path     = FileConverter::store($file, "documents/{$id}");
 
         $docFile = DocumentFile::create([
             'document_id'   => $id,
@@ -300,7 +360,7 @@ class DocumentController extends Controller
             'original_name' => $file->getClientOriginalName(),
             'path'          => $path,
             'type'          => $request->type,
-            'size'          => $file->getSize(),
+            'size'          => Storage::disk('public')->size($path),
             'uploaded_by'   => $request->user()->id,
         ]);
 
@@ -314,6 +374,44 @@ class DocumentController extends Controller
         $file->delete();
 
         return response()->json(['message' => 'File berhasil dihapus']);
+    }
+
+    public function uploadStageDocument(Request $request, int $id, int $stageId): JsonResponse
+    {
+        $document = Document::findOrFail($id);
+        $stage = DocumentStage::where('document_id', $id)->findOrFail($stageId);
+
+        $validator = Validator::make($request->all(), [
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png,doc,docx|max:10240',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
+        }
+
+        $file = $request->file('file');
+        $path = FileConverter::store($file, "documents/{$id}/stages/{$stageId}");
+
+        $doc = StageDocument::create([
+            'stage_id'      => $stageId,
+            'filename'      => basename($path),
+            'original_name' => $file->getClientOriginalName(),
+            'path'          => $path,
+            'size'          => Storage::disk('public')->size($path),
+            'uploaded_by'   => $request->user()->id,
+        ]);
+
+        return response()->json(['message' => 'Berkas berhasil diupload', 'document' => $doc], 201);
+    }
+
+    public function deleteStageDocument(Request $request, int $id, int $stageId, int $fileId): JsonResponse
+    {
+        $stage = DocumentStage::where('document_id', $id)->findOrFail($stageId);
+        $file = StageDocument::where('stage_id', $stageId)->findOrFail($fileId);
+        Storage::disk('public')->delete($file->path);
+        $file->delete();
+
+        return response()->json(['message' => 'Berkas dihapus']);
     }
 
     public function publicTrack(Request $request, string $code): JsonResponse

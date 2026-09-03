@@ -8,6 +8,8 @@ class OrderDocument extends Model
 {
     protected $fillable = ['document_id', 'document_catalog_id', 'filename', 'original_name', 'path', 'size', 'uploaded_by'];
 
+    protected $appends = ['url'];
+
     public function document()
     {
         return $this->belongsTo(Document::class);

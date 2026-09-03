@@ -13,6 +13,7 @@ use App\Models\OrderActorDocument;
 use App\Models\OrderAsset;
 use App\Models\OrderAssetDocument;
 use App\Models\OrderDocument;
+use App\Support\FileConverter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -126,7 +127,7 @@ class OrderController extends Controller
         }
 
         $file = $request->file('file');
-        $path = $file->store("orders/{$documentId}/actors/{$actorId}", 'public');
+        $path = FileConverter::store($file, "orders/{$documentId}/actors/{$actorId}");
 
         $doc = OrderActorDocument::create([
             'order_actor_id'     => $actor->id,
@@ -134,7 +135,7 @@ class OrderController extends Controller
             'filename'           => basename($path),
             'original_name'      => $file->getClientOriginalName(),
             'path'               => $path,
-            'size'               => $file->getSize(),
+            'size'               => Storage::disk('public')->size($path),
             'uploaded_by'        => $request->user()->id,
         ]);
 
@@ -202,7 +203,7 @@ class OrderController extends Controller
         }
 
         $file = $request->file('file');
-        $path = $file->store("orders/{$documentId}/assets/{$assetId}", 'public');
+        $path = FileConverter::store($file, "orders/{$documentId}/assets/{$assetId}");
 
         $doc = OrderAssetDocument::create([
             'order_asset_id'     => $asset->id,
@@ -210,7 +211,7 @@ class OrderController extends Controller
             'filename'           => basename($path),
             'original_name'      => $file->getClientOriginalName(),
             'path'               => $path,
-            'size'               => $file->getSize(),
+            'size'               => Storage::disk('public')->size($path),
             'uploaded_by'        => $request->user()->id,
         ]);
 
@@ -239,7 +240,7 @@ class OrderController extends Controller
         }
 
         $file = $request->file('file');
-        $path = $file->store("orders/{$documentId}/documents", 'public');
+        $path = FileConverter::store($file, "orders/{$documentId}/documents");
 
         $doc = OrderDocument::create([
             'document_id'         => $document->id,
@@ -247,7 +248,7 @@ class OrderController extends Controller
             'filename'            => basename($path),
             'original_name'       => $file->getClientOriginalName(),
             'path'                => $path,
-            'size'                => $file->getSize(),
+            'size'                => Storage::disk('public')->size($path),
             'uploaded_by'         => $request->user()->id,
         ]);
 

@@ -8,6 +8,8 @@ class OrderAssetDocument extends Model
 {
     protected $fillable = ['order_asset_id', 'document_catalog_id', 'filename', 'original_name', 'path', 'size', 'uploaded_by'];
 
+    protected $appends = ['url'];
+
     public function orderAsset()
     {
         return $this->belongsTo(OrderAsset::class);

@@ -8,6 +8,8 @@ class OrderActorDocument extends Model
 {
     protected $fillable = ['order_actor_id', 'document_catalog_id', 'filename', 'original_name', 'path', 'size', 'uploaded_by'];
 
+    protected $appends = ['url'];
+
     public function orderActor()
     {
         return $this->belongsTo(OrderActor::class);
