@@ -134,7 +134,7 @@ Route::prefix('v1')->group(function () {
                 Route::post('document-types', [SettingController::class, 'createDocumentType'])->middleware('permission:settings.edit');
                 Route::put('document-types/{id}', [SettingController::class, 'updateDocumentType'])->middleware('permission:settings.edit');
                 Route::get('order-mapping', [SettingController::class, 'orderMapping'])->middleware('permission:settings.view');
-                Route::put('order-mapping/{typeId}', [SettingController::class, 'syncOrderMapping'])->middleware('permission:settings.edit');
+                Route::post('order-mapping/{typeId}', [SettingController::class, 'syncOrderMapping'])->middleware('permission:settings.edit');
             });
 
             // Order actor/asset API (dynamic order detail)
