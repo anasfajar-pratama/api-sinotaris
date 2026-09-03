@@ -90,9 +90,6 @@ class SettingController extends Controller
 
     public function syncOrderMapping(Request $request): JsonResponse
     {
-        $typeId = $request->input('type_id');
-        $type = DocumentType::findOrFail($typeId);
-
         $validator = Validator::make($request->all(), [
             'type_id' => 'required|integer|exists:document_types,id',
             'actors' => 'array',
@@ -103,6 +100,8 @@ class SettingController extends Controller
         if ($validator->fails()) {
             return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
         }
+
+        $type = DocumentType::findOrFail($request->input('type_id'));
 
         DB::transaction(function () use ($request, $type) {
             $typeId = $type->id;
