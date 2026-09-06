@@ -3,11 +3,11 @@
         Options -MultiViews -Indexes
     </IfModule>
 
+    RewriteEngine On
+
     # Handle CORS preflight (OPTIONS) requests
     RewriteCond %{REQUEST_METHOD} OPTIONS
-    RewriteRule ^(.*)$ $1 [R=200,L,E=HTTP_ORIGIN:%{HTTP:ORIGIN}]
-
-    RewriteEngine On
+    RewriteRule ^(.*)$ $1 [R=200,L]
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
@@ -30,8 +30,7 @@
 
 # CORS headers for all responses
 <IfModule mod_headers.c>
-    SetEnvIf Origin "^(https://sinotaris\.kebunkode\.com|https://dev-sinotaris\.kebunkode\.com|https://api-sinotaris\.kebunkode\.com|http://localhost:3000|http://localhost:5173)$" CORS_ALLOW_ORIGIN=$1
-    Header always set Access-Control-Allow-Origin %{CORS_ALLOW_ORIGIN}e env=CORS_ALLOW_ORIGIN
+    Header always set Access-Control-Allow-Origin "https://dev-sinotaris.kebunkode.com"
     Header always set Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     Header always set Access-Control-Allow-Headers "Authorization, Content-Type, Accept, X-Requested-With, X-HTTP-Method-Override"
     Header always set Access-Control-Allow-Credentials "true"

@@ -41,6 +41,13 @@ class DocumentController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        // Hosting/shared-hosting kadang tidak menerapkan konversi '' -> null
+        // (mis. saat request tiba sebagai multipart/form-data).
+        // Normalisasi eksplisit agar field tanggal kosong tidak sampai ke MySQL.
+        if ($request->filled('deadline') === false && $request->exists('deadline')) {
+            $request->merge(['deadline' => null]);
+        }
+
         $validator = Validator::make($request->all(), [
             'type_id'     => 'required|exists:document_types,id',
             'client_id'   => 'required|exists:clients,id',
@@ -197,6 +204,10 @@ class DocumentController extends Controller
     {
         $document = Document::findOrFail($id);
         $oldData  = $document->toArray();
+
+        if ($request->filled('deadline') === false && $request->exists('deadline')) {
+            $request->merge(['deadline' => null]);
+        }
 
         $validator = Validator::make($request->all(), [
             'title'       => 'sometimes|string|max:255',
