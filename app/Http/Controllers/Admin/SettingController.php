@@ -50,20 +50,28 @@ class SettingController extends Controller
             'name'     => 'required|string|max:255',
             'slug'     => 'required|string|unique:document_types,slug',
             'sla_days' => 'required|integer|min:1',
+            'category' => 'nullable|in:notaris,ppat',
         ]);
 
         if ($validator->fails()) {
             return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
         }
 
-        $type = DocumentType::create($request->only(['name', 'slug', 'description', 'sla_days', 'is_active']));
+        $type = DocumentType::create($request->only(['name', 'slug', 'description', 'sla_days', 'is_active', 'category']));
         return response()->json(['message' => 'Jenis dokumen berhasil ditambahkan', 'type' => $type], 201);
     }
 
     public function updateDocumentType(Request $request, int $id): JsonResponse
     {
+        $validator = Validator::make($request->all(), [
+            'category' => 'nullable|in:notaris,ppat',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validasi gagal', 'errors' => $validator->errors()], 422);
+        }
+
         $type = DocumentType::findOrFail($id);
-        $type->update($request->only(['name', 'description', 'sla_days', 'is_active']));
+        $type->update($request->only(['name', 'description', 'sla_days', 'is_active', 'category']));
         return response()->json(['message' => 'Jenis dokumen berhasil diperbarui', 'type' => $type->fresh()]);
     }
 

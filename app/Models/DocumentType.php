@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class DocumentType extends Model
 {
-    protected $fillable = ['name', 'slug', 'description', 'sla_days', 'is_active'];
+    protected $fillable = ['name', 'slug', 'description', 'sla_days', 'is_active', 'category'];
 
     protected $casts = ['is_active' => 'boolean'];
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\ActorType;
 use App\Models\AssetType;
 use App\Models\Document;
@@ -21,6 +22,24 @@ use Illuminate\Support\Facades\Validator;
 
 class OrderController extends Controller
 {
+    /**
+     * Catat aktivitas perubahan data order (module=document, record_id=document_id)
+     * agar halaman detail bisa menampilkan riwayat perubahan.
+     */
+    private function logActivity(Request $request, int $documentId, string $action, ?string $label, ?array $oldData = null, ?array $newData = null): void
+    {
+        ActivityLog::create([
+            'user_id'    => $request->user()?->id,
+            'action'     => $action,
+            'module'     => 'document',
+            'record_id'  => $documentId,
+            'description'=> $label,
+            'old_data'   => $oldData !== null ? json_encode($oldData) : null,
+            'new_data'   => $newData !== null ? json_encode($newData) : null,
+            'ip_address' => $request->ip(),
+        ]);
+    }
+
     public function template(Request $request, int $documentTypeId): JsonResponse
     {
         $type = DocumentType::with([
@@ -94,22 +113,54 @@ class OrderController extends Controller
             'sort_order'    => $document->actors()->count() + 1,
         ]);
 
+        $this->logActivity(
+            $request,
+            $documentId,
+            'created',
+            'Pihak ditambahkan: ' . ($actor->actorType->label ?? $request->actor_type_key),
+            null,
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'data' => $actor->data]
+        );
+
         return response()->json(['message' => 'Aktor berhasil ditambahkan', 'actor' => $actor->load('actorType')], 201);
     }
 
     public function updateActor(Request $request, int $documentId, int $actorId): JsonResponse
     {
         $actor = OrderActor::where('document_id', $documentId)->findOrFail($actorId);
+        $oldData = $actor->data;
         $data = $request->input('data');
         if ($data !== null) {
-            $actor->update(['data' => array_merge(is_array($actor->data) ? $actor->data : [], $data)]);
+            // Frontend mengirim data penuh form, jadi ganti total (bukan merge)
+            // agar field yang dikosongkan benar-benar terhapus.
+            $actor->update(['data' => $data]);
         }
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'updated',
+            'Data pihak diperbarui: ' . ($actor->actorType->label ?? "Pihak #{$actorId}"),
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'data' => $oldData],
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'data' => $actor->fresh()->data]
+        );
+
         return response()->json(['message' => 'Aktor berhasil diperbarui', 'actor' => $actor->fresh()->load('actorType')]);
     }
 
     public function destroyActor(Request $request, int $documentId, int $actorId): JsonResponse
     {
-        OrderActor::where('document_id', $documentId)->findOrFail($actorId)->delete();
+        $actor = OrderActor::where('document_id', $documentId)->findOrFail($actorId);
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'deleted',
+            'Pihak dihapus: ' . ($actor->actorType->label ?? "Pihak #{$actorId}"),
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'data' => $actor->data]
+        );
+
+        $actor->delete();
         return response()->json(['message' => 'Aktor berhasil dihapus']);
     }
 
@@ -139,13 +190,32 @@ class OrderController extends Controller
             'uploaded_by'        => $request->user()->id,
         ]);
 
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_uploaded',
+            'Berkas pihak diupload: ' . ($doc->documentCatalog->label ?? $file->getClientOriginalName()) . ' (' . ($actor->actorType->label ?? "Pihak #{$actorId}") . ')',
+            null,
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'document_id' => $doc->id, 'doc_key' => $doc->document_catalog_id, 'original_name' => $doc->original_name]
+        );
+
         return response()->json(['message' => 'Dokumen berhasil diupload', 'document' => $doc->load('documentCatalog')], 201);
     }
 
     public function destroyActorDocument(Request $request, int $documentId, int $actorId, int $fileId): JsonResponse
     {
         $doc = OrderActorDocument::where('order_actor_id', $actorId)->findOrFail($fileId);
-        \Illuminate\Support\Facades\Storage::disk('public')->delete($doc->path);
+        $actor = OrderActor::where('document_id', $documentId)->findOrFail($actorId);
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_deleted',
+            'Berkas pihak dihapus: ' . ($doc->documentCatalog->label ?? $doc->original_name) . ' (' . ($actor->actorType->label ?? "Pihak #{$actorId}") . ')',
+            ['entity' => 'actor', 'entity_id' => $actor->id, 'document_id' => $doc->id, 'original_name' => $doc->original_name]
+        );
+
+        Storage::disk('public')->delete($doc->path);
         $doc->delete();
         return response()->json(['message' => 'Dokumen berhasil dihapus']);
     }
@@ -170,22 +240,54 @@ class OrderController extends Controller
             'sort_order'    => $document->assets()->count() + 1,
         ]);
 
+        $this->logActivity(
+            $request,
+            $documentId,
+            'created',
+            'Aset ditambahkan: ' . ($asset->assetType->label ?? $request->asset_type_key),
+            null,
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'data' => $asset->data]
+        );
+
         return response()->json(['message' => 'Aset berhasil ditambahkan', 'asset' => $asset->load('assetType')], 201);
     }
 
     public function updateAsset(Request $request, int $documentId, int $assetId): JsonResponse
     {
         $asset = OrderAsset::where('document_id', $documentId)->findOrFail($assetId);
+        $oldData = $asset->data;
         $data = $request->input('data');
         if ($data !== null) {
-            $asset->update(['data' => array_merge(is_array($asset->data) ? $asset->data : [], $data)]);
+            // Frontend mengirim data penuh form, jadi ganti total (bukan merge)
+            // agar field yang dikosongkan benar-benar terhapus.
+            $asset->update(['data' => $data]);
         }
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'updated',
+            'Data aset diperbarui: ' . ($asset->assetType->label ?? "Aset #{$assetId}"),
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'data' => $oldData],
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'data' => $asset->fresh()->data]
+        );
+
         return response()->json(['message' => 'Aset berhasil diperbarui', 'asset' => $asset->fresh()->load('assetType')]);
     }
 
     public function destroyAsset(Request $request, int $documentId, int $assetId): JsonResponse
     {
-        OrderAsset::where('document_id', $documentId)->findOrFail($assetId)->delete();
+        $asset = OrderAsset::where('document_id', $documentId)->findOrFail($assetId);
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'deleted',
+            'Aset dihapus: ' . ($asset->assetType->label ?? "Aset #{$assetId}"),
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'data' => $asset->data]
+        );
+
+        $asset->delete();
         return response()->json(['message' => 'Aset berhasil dihapus']);
     }
 
@@ -215,13 +317,32 @@ class OrderController extends Controller
             'uploaded_by'        => $request->user()->id,
         ]);
 
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_uploaded',
+            'Berkas aset diupload: ' . ($doc->documentCatalog->label ?? $file->getClientOriginalName()) . ' (' . ($asset->assetType->label ?? "Aset #{$assetId}") . ')',
+            null,
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'document_id' => $doc->id, 'doc_key' => $doc->document_catalog_id, 'original_name' => $doc->original_name]
+        );
+
         return response()->json(['message' => 'Dokumen berhasil diupload', 'document' => $doc->load('documentCatalog')], 201);
     }
 
     public function destroyAssetDocument(Request $request, int $documentId, int $assetId, int $fileId): JsonResponse
     {
         $doc = OrderAssetDocument::where('order_asset_id', $assetId)->findOrFail($fileId);
-        \Illuminate\Support\Facades\Storage::disk('public')->delete($doc->path);
+        $asset = OrderAsset::where('document_id', $documentId)->findOrFail($assetId);
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_deleted',
+            'Berkas aset dihapus: ' . ($doc->documentCatalog->label ?? $doc->original_name) . ' (' . ($asset->assetType->label ?? "Aset #{$assetId}") . ')',
+            ['entity' => 'asset', 'entity_id' => $asset->id, 'document_id' => $doc->id, 'original_name' => $doc->original_name]
+        );
+
+        Storage::disk('public')->delete($doc->path);
         $doc->delete();
         return response()->json(['message' => 'Dokumen berhasil dihapus']);
     }
@@ -252,12 +373,30 @@ class OrderController extends Controller
             'uploaded_by'         => $request->user()->id,
         ]);
 
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_uploaded',
+            'Berkas order diupload: ' . ($doc->documentCatalog->label ?? $file->getClientOriginalName()),
+            null,
+            ['entity' => 'order', 'document_id' => $doc->id, 'doc_key' => $doc->document_catalog_id, 'original_name' => $doc->original_name]
+        );
+
         return response()->json(['message' => 'Dokumen berhasil diupload', 'document' => $doc->load('documentCatalog')], 201);
     }
 
     public function destroyOrderDocument(Request $request, int $documentId, int $fileId): JsonResponse
     {
         $doc = OrderDocument::where('document_id', $documentId)->findOrFail($fileId);
+
+        $this->logActivity(
+            $request,
+            $documentId,
+            'document_deleted',
+            'Berkas order dihapus: ' . ($doc->documentCatalog->label ?? $doc->original_name),
+            ['entity' => 'order', 'document_id' => $doc->id, 'original_name' => $doc->original_name]
+        );
+
         Storage::disk('public')->delete($doc->path);
         $doc->delete();
         return response()->json(['message' => 'Dokumen berhasil dihapus']);

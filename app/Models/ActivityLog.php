@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class ActivityLog extends Model
 {
-    protected $fillable = ['user_id', 'action', 'module', 'record_id', 'old_data', 'new_data', 'ip_address'];
+    protected $fillable = ['user_id', 'action', 'module', 'record_id', 'description', 'old_data', 'new_data', 'ip_address'];
 
     public function user() { return $this->belongsTo(User::class); }
 }

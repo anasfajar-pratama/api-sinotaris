@@ -28,6 +28,7 @@ class DocumentController extends Controller
                 ->orWhere('doc_number', 'like', "%{$request->search}%"))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->when($request->type_id, fn ($q) => $q->where('type_id', $request->type_id))
+            ->when($request->category, fn ($q) => $q->whereHas('documentType', fn ($t) => $t->where('category', $request->category)))
             ->when($request->client_id, fn ($q) => $q->where('client_id', $request->client_id))
             ->when($request->priority, fn ($q) => $q->where('priority', $request->priority))
             ->when($request->date_from, fn ($q) => $q->whereDate('created_at', '>=', $request->date_from))
@@ -99,6 +100,7 @@ class DocumentController extends Controller
             'action'    => 'created',
             'module'    => 'document',
             'record_id' => $document->id,
+            'description' => 'Order dibuat: ' . $document->title,
             'new_data'  => json_encode($document->toArray()),
             'ip_address' => $request->ip(),
         ]);
@@ -139,14 +141,20 @@ class DocumentController extends Controller
         $items = [];
 
         // Dokumen wajib level order (wajib)
+        // Upload di card Aset (OrderAssetDocument) juga dianggap memenuhi butir
+        // yang sama — mis. IMB/SLF/SPPT diunggah lewat aset tetap melengkapi order.
         $document->documentType?->requiredDocuments->each(function ($req) use (&$items, $document) {
             $catalog = $req->documentCatalog;
+            $uploadedInOrder = $document->orderDocuments->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id);
+            $uploadedInAssets = $document->assets->contains(
+                fn ($asset) => $asset->documents->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id)
+            );
             $items[] = [
                 'group'     => 'Order',
                 'key'       => $catalog?->key,
                 'label'     => $catalog?->label ?? 'Dokumen',
                 'required'  => true,
-                'uploaded'  => $document->orderDocuments->contains(fn ($d) => $d->document_catalog_id === $req->document_catalog_id),
+                'uploaded'  => $uploadedInOrder || $uploadedInAssets,
             ];
         });
 
@@ -228,6 +236,7 @@ class DocumentController extends Controller
             'action'     => 'updated',
             'module'     => 'document',
             'record_id'  => $document->id,
+            'description' => 'Data order diperbarui: ' . ($document->fresh()->title ?? ''),
             'old_data'   => json_encode($oldData),
             'new_data'   => json_encode($document->fresh()->toArray()),
             'ip_address' => $request->ip(),
@@ -262,6 +271,23 @@ class DocumentController extends Controller
         return response()->json(['stages' => $stages]);
     }
 
+    /**
+     * Riwayat aktivitas / perubahan data order (termasuk log dari OrderController
+     * yang memakai module=document + record_id=id order).
+     */
+    public function activity(Request $request, int $id): JsonResponse
+    {
+        Document::findOrFail($id);
+
+        $logs = ActivityLog::with('user')
+            ->where('module', 'document')
+            ->where('record_id', $id)
+            ->latest()
+            ->paginate($request->per_page ?? 30);
+
+        return response()->json($logs);
+    }
+
     public function updateStage(Request $request, int $id): JsonResponse
     {
         $document = Document::findOrFail($id);
@@ -282,11 +308,14 @@ class DocumentController extends Controller
             ->where('stage_number', $request->stage_number)
             ->firstOrFail();
 
-        if ($stage->status === 'completed' && $request->has('pic_id') && $request->pic_id != $stage->pic_id) {
+        if ($stage->status === 'completed' && $request->filled('pic_id') && $request->pic_id != $stage->pic_id) {
             return response()->json(['message' => 'PIC tahapan tidak dapat diubah setelah tahap selesai'], 422);
         }
 
         $oldPicId = $stage->pic_id;
+        // pic_id null (tidak dipilih) = tidak ada perubahan PIC.
+        $picChanged = $request->filled('pic_id') && $request->pic_id != $oldPicId;
+        $newPicId = $picChanged ? (int) $request->pic_id : $oldPicId;
 
         $updates = [
             'status'     => $request->status,
@@ -294,8 +323,8 @@ class DocumentController extends Controller
             'handled_by' => $request->user()->id,
         ];
 
-        if ($request->has('pic_id')) {
-            $updates['pic_id'] = $request->pic_id;
+        if ($picChanged) {
+            $updates['pic_id'] = $newPicId;
         }
 
         if ($request->status === 'in_progress' && $stage->status !== 'in_progress') {
@@ -310,17 +339,35 @@ class DocumentController extends Controller
 
         $stage->update($updates);
 
-        // Catat riwayat PIC (pindah tugas / penugasan) bila pic_id berubah.
-        if ($request->has('pic_id') && $request->pic_id != $oldPicId) {
+        // Catat riwayat PIC (pindah tugas / penugasan) hanya saat PIC benar-benar berubah.
+        if ($picChanged) {
             DocumentStagePic::create([
                 'stage_id'    => $stage->id,
-                'user_id'     => $request->pic_id,
+                'user_id'     => $newPicId,
                 'assigned_by' => $request->user()->id,
                 'action'      => $oldPicId === null ? 'assigned' : 'transferred',
                 'note'        => $request->notes,
                 'assigned_at' => now(),
             ]);
         }
+
+        // Catat aktivitas perubahan tahapan (mulai/selesai/pindah PIC/catatan).
+        $actionLabel = match (true) {
+            $request->status === 'completed' => 'Tahap "' . $stage->stage_name . '" ditandai selesai',
+            $request->status === 'in_progress' && $stage->wasChanged('started_at') && !$picChanged
+                => 'Tahap "' . $stage->stage_name . '" dimulai',
+            $picChanged && $oldPicId !== null => 'PIC tahap "' . $stage->stage_name . '" dipindah ke ' . ($stage->fresh()->pic?->name ?? "user #{$newPicId}"),
+            $picChanged                       => 'PIC tahap "' . $stage->stage_name . '" ditugaskan ke ' . ($stage->fresh()->pic?->name ?? "user #{$newPicId}"),
+            default                           => 'Catatan/PIC tahap "' . $stage->stage_name . '" diperbarui',
+        };
+        ActivityLog::create([
+            'user_id'    => $request->user()->id,
+            'action'     => $request->status === 'completed' ? 'stage_completed' : ($request->status === 'in_progress' && $stage->wasChanged('started_at') && !$picChanged ? 'stage_started' : 'stage_updated'),
+            'module'     => 'document',
+            'record_id'  => $document->id,
+            'description'=> $actionLabel,
+            'ip_address' => $request->ip(),
+        ]);
 
         // Update document status (dynamic based on stage template)
         if ($request->stage_number == $lastStage && $request->status === 'completed') {
@@ -412,6 +459,15 @@ class DocumentController extends Controller
             'uploaded_by'   => $request->user()->id,
         ]);
 
+        ActivityLog::create([
+            'user_id'    => $request->user()->id,
+            'action'     => 'document_uploaded',
+            'module'     => 'document',
+            'record_id'  => $id,
+            'description'=> 'Berkas pendukung tahap "' . $stage->stage_name . '" diupload: ' . $file->getClientOriginalName(),
+            'ip_address' => $request->ip(),
+        ]);
+
         return response()->json(['message' => 'Berkas berhasil diupload', 'document' => $doc], 201);
     }
 
@@ -421,6 +477,15 @@ class DocumentController extends Controller
         $file = StageDocument::where('stage_id', $stageId)->findOrFail($fileId);
         Storage::disk('public')->delete($file->path);
         $file->delete();
+
+        ActivityLog::create([
+            'user_id'    => $request->user()->id,
+            'action'     => 'document_deleted',
+            'module'     => 'document',
+            'record_id'  => $id,
+            'description'=> 'Berkas pendukung tahap "' . $stage->stage_name . '" dihapus: ' . $file->original_name,
+            'ip_address' => $request->ip(),
+        ]);
 
         return response()->json(['message' => 'Berkas dihapus']);
     }

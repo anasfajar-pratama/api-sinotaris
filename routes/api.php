@@ -58,6 +58,7 @@ Route::prefix('v1')->group(function () {
                 Route::put('/{id}', [DocumentController::class, 'update'])->middleware('permission:documents.edit');
                 Route::delete('/{id}', [DocumentController::class, 'destroy'])->middleware('permission:documents.delete');
                 Route::get('/{id}/timeline', [DocumentController::class, 'timeline'])->middleware('permission:documents.view');
+                Route::get('/{id}/activity', [DocumentController::class, 'activity'])->middleware('permission:documents.view');
                 Route::put('/{id}/stage', [DocumentController::class, 'updateStage'])->middleware('permission:documents.approve');
                 Route::post('/{id}/notes', [DocumentController::class, 'addNote'])->middleware('permission:documents.edit');
                 Route::post('/{id}/files', [DocumentController::class, 'uploadFile'])->middleware('permission:documents.edit');
